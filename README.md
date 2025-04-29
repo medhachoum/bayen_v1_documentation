@@ -1,277 +1,230 @@
-# Advanced Saudi Legal Assistant API
+# Bayen API – Front-End Integration Guide
+Modern, well-typed JSON chat API for accessing **Bayen, the advanced Saudi-law assistant**.  
+This document is aimed at **front-end engineers** who need a crystal-clear contract for calling the service from web- or mobile-apps.
 
-Welcome to the Advanced Saudi Legal Assistant API. This API provides expert legal responses tailored to Saudi Arabian laws and regulations. It is designed to accept a full conversation context, choose an appropriate AI model based on your selection, and stream back responses incrementally. Each response includes a fixed conversation title generated once from the initial query, along with additional metadata.
+---
 
-> **Note:** The API response is delivered via Server-Sent Events (SSE). Clients must be capable of handling streaming data.
+## Table of Contents
+1. [Base URL](#base-url)  
+2. [Authentication](#authentication)  
+3. [Endpoint Reference](#endpoint-reference)  
+4. [Request Schema](#request-schema)  
+5. [Response Schema](#response-schema)  
+6. [Example Chat Flow](#example-chat-flow)  
+7. [Error Handling](#error-handling)  
+8. [TypeScript Types](#typescript-types)  
+9. [Best Practices](#best-practices)  
 
 ---
 
 ## Base URL
-
-All API requests should be made to the following base URL:
-
 ```
 https://bayen-v1.onrender.com
 ```
+
+All paths below are relative to this root.
 
 ---
 
 ## Authentication
 
-Every request to the API requires a valid API key. Use the custom HTTP header:
+Every request **must** include an `X-API-Key` header:
 
-- **X-API-Key**: Your project-specific API key.
+```
+X-API-Key: <your-project-key>
+```
 
-> **Security Note:** Ensure that your API key is kept confidential and never exposed on the client side.
+If the header is missing or invalid the server returns **401 Unauthorized**.
 
----
-
-## Endpoints
-
-### POST `/chat`
-
-This endpoint accepts a conversation context and returns a streaming response with the AI-generated legal answer, along with detailed metadata. 
-
-#### Summary
-
-- **Method:** `POST`
-- **Path:** `/chat`
-- **Tags:** Chat
-- **Description:**  
-  This endpoint processes a complete conversation and returns an incremental, streamed response. The response includes:
-  - **message:** The AI’s answer (delivered as chunks).
-  - **citations:** A list of reference texts (if available).
-  - **metadata:** Detailed information including a unique response identifier, creation timestamp, a fixed conversation title, and the model alias provided by the client.
-  
-  The conversation title is generated based on the initial user query and remains unchanged for subsequent messages in the same session.
+> **Never** embed the key in compiled client bundles—pass it from a secure backend, environment variable, or in-app secret store.
 
 ---
 
-## Request Format
+## Endpoint Reference
 
-All requests must be in JSON format. The following schema details the required structure.
+| Method | Path   | Description             |
+|--------|--------|-------------------------|
+| POST   | `/chat` | Submit a chat turn and receive Bayen’s answer. |
 
-### ChatRequest
-
-| Parameter           | Type     | Required | Description |
-| ------------------- | -------- | -------- | ----------- |
-| **model**           | `string` | Yes      | The model alias to be used for the request. Accepted values are: `bayen-pro` or `bayen-lite`. The provided alias will be reflected back in the response metadata. |
-| **messages**        | `array`  | Yes      | An ordered list of message objects representing the conversation. Each message must include a role and content. If no system message is provided, a default system prompt is automatically inserted. |
-| **structured_output** | `boolean` | Optional (default: `true`) | Specifies whether the output should be structured following a predefined JSON Schema. Set to `true` by default. |
-| **max_tokens**      | `integer` | Optional | The maximum number of tokens (words/characters) for the response. This field is included only if explicitly provided. |
-
-### Message Object
-
-| Field    | Type     | Required | Description |
-| -------- | -------- | -------- | ----------- |
-| **role** | `string` (enum: "system", "user", "assistant") | Yes      | The role of the message in the conversation. Use `system` for directives, `user` for queries, and `assistant` for previous AI responses. |
-| **content** | `string` | Yes      | The text content of the message. |
+Streaming is **not** yet supported—the response arrives as a single JSON payload.
 
 ---
 
-## Example Request
+## Request Schema
+```jsonc
+{
+  "model": "bayen-pro",        // or "bayen-lite"
+  "messages": [                // conversation so far
+    { "role": "user", "content": "نص السؤال..." },
+    { "role": "assistant", "content": "رد سابق (اختياري)" }
+  ],
+  "structured_output": true,   // default = true
+  "max_tokens": 1024           // optional hard cap
+}
+```
 
-Below is an example using cURL:
+### Fields
+
+| Name               | Type / Enum                         | Required | Notes |
+|--------------------|-------------------------------------|----------|-------|
+| `model`            | `"bayen-pro"` \| `"bayen-lite"`     | ✓        | `bayen-pro` is deeper & slower; `bayen-lite` is lighter & faster. |
+| `messages`         | `Message[]`                         | ✓        | Chronological chat history. First item **must** have role `"user"`. |
+| `structured_output`| `boolean`                           | ✕        | When `true` the answer is returned in a rich JSON container (recommended).|
+| `max_tokens`       | `int`                               | ✕        | Soft limit; defaults to the provider’s maximum. |
+
+#### `Message`
+```ts
+type MessageRole = "system" | "user" | "assistant";
+
+interface Message {
+  role: MessageRole;
+  content: string;
+}
+```
+* `system` messages are optional and let you override the default assistant behaviour (e.g. localisation).  
+* Use `assistant` messages only when you need to replay previous answers to maintain context.
+
+---
+
+## Response Schema
+
+With `structured_output = true` (default):
+
+```jsonc
+{
+  "think": "تحليل داخلي (قد يكون فارغًا)...",
+  "message": "الإجابة النهائية بصيغة Markdown...",
+  "citations": [
+    "https://laws.boe.gov.sa/.../article-12",
+    "https://moj.gov.sa/..."
+  ],
+  "metadata": {
+    "id": "ccd82464-39d2-4c34-a7da-4f0c0c53dbe4",
+    "model": "bayen-pro",
+    "created": 1714320000,
+    "object": "response.completion",
+    "title": "عنوان مختصر للاستشارة"
+  }
+}
+```
+
+| Field      | Type            | Description |
+|------------|-----------------|-------------|
+| `think`    | `string|null`   | Internal reasoning—useful for debugging; hide in production UIs if you wish. |
+| `message`  | `string`        | Ready-to-render Markdown answer in Arabic (IRAC-structured). |
+| `citations`| `string[]`      | List of authoritative URLs backing the analysis. |
+| `metadata` | `object`        | Tracking info (UUID, model, Unix epoch, etc.). |
+
+If you set `structured_output = false` the server returns a **plain Markdown string** instead.
+
+---
+
+## Example Chat Flow
+
+<details>
+<summary>Minimal cURL</summary>
 
 ```bash
-curl --request POST \
-  --url https://bayen-v1.onrender.com/chat \
-  --header "X-API-Key: YOUR_API_KEY" \
-  --header "Content-Type: application/json" \
-  --header "Accept: text/event-stream" \
-  --data '{
-    "model": "bayen-pro",
-    "messages": [
-      {
-        "role": "user",
-        "content": "What are the penalties for forgery under Saudi law?"
-      }
-    ],
-    "structured_output": true,
-    "max_tokens": 500
-  }'
-```
-
-Replace `YOUR_API_KEY` with your valid API key.
-
----
-
-## Response Specification
-
-The API returns a streaming response (SSE) with each chunk containing a JSON object structured as follows:
-
-### Response JSON Schema
-
-| Field       | Type     | Description |
-| ----------- | -------- | ----------- |
-| **message** | `string` | A portion of the complete answer generated by the AI, delivered incrementally. |
-| **citations** | `array` of `string` | A list of citation URLs or references (if available). |
-| **metadata** | `object` | Additional information about the response including: |
-| &nbsp;&nbsp;&nbsp;&nbsp;**id**      | `string`  | A unique identifier for the response chunk. |
-| &nbsp;&nbsp;&nbsp;&nbsp;**model**   | `string`  | The model alias that was provided in the request (e.g., `bayen-pro` or `bayen-lite`). |
-| &nbsp;&nbsp;&nbsp;&nbsp;**created** | `number`  | Unix timestamp (in seconds) marking when the response was created. |
-| &nbsp;&nbsp;&nbsp;&nbsp;**object**  | `string`  | The object type (e.g., `chat.completion`). |
-| &nbsp;&nbsp;&nbsp;&nbsp;**title**   | `string`  | A brief, fixed title for the conversation generated from the initial query. This title remains constant for the session. |
-
-### Streaming Behavior
-
-- **Data Format:**  
-  Each data chunk is prefixed with `data: ` and separated by two newline characters (`\n\n`).
-
-- **Completion Indicator:**  
-  The stream ends when the API sends `data: [DONE]`.
-
----
-
-## Detailed Flow
-
-1. **Request Handling:**  
-   - The API accepts the full conversation context. If a system message is not provided, it automatically prepends the default system prompt.
-   - The `model` field lets the client choose the desired model configuration. Internally, this alias is mapped to the appropriate configuration, but the original alias is retained in the response metadata.
-  
-2. **Payload Generation:**  
-   - The payload includes configuration parameters for streaming responses, search filters, temperature, nucleus sampling (top_p), and penalty values.
-   - The optional `max_tokens` is included only if specified by the client.
-   - Structured output is enabled by default to ensure that responses match the defined JSON schema.
-  
-3. **Streaming Response:**  
-   - The API returns a streamed response where each chunk contains part of the generated answer.
-   - Metadata is updated as new chunks arrive. The conversation title is generated once from the initial query (the model is instructed via the system prompt) and then remains fixed.
-   - The response is delivered via SSE, ending with `data: [DONE]`.
-
-4. **Response Assembly:**  
-   - The client should reassemble the chunks to display the complete answer.
-   - Metadata in each chunk reflects the chosen model (as provided by the client) rather than the internal configuration.
-
-5. **Output Details:**  
-   - In some response chunks, you may notice a segment enclosed within `<think> ... </think>`. This section contains the internal reasoning process of the AI model before finalizing the answer. This is included to provide transparency about the model's chain-of-thought, though it is not intended for end-user display.
-
----
-
-## Example Response
-
-An example stream of data chunks might look like this:
-
-```json
-data: {
-  "message": "The penalties for forgery include ...",
-  "citations": [],
-  "metadata": {
-    "model": "bayen-pro",
-    "id": "a2f2ce2d-7b7e-48f8-8b56-4509d39e1937",
-    "created": 1743529939,
-    "object": "chat.completion",
-    "title": "Penalties for Forgery under Saudi Law"
-  }
+curl -X POST https://bayen-v1.onrender.com/chat \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $BAYEN_KEY" \
+  -d @- <<'JSON'
+{
+  "model": "bayen-lite",
+  "messages": [
+    { "role": "user", "content": "ما العقوبة على بيع منتج غذائي مغشوش في السعودية؟" }
+  ]
 }
-data: {
-  "message": " additional details about imprisonment and fines ...",
-  "citations": [],
-  "metadata": {
-    "model": "bayen-pro",
-    "id": "a2f2ce2d-7b7e-48f8-8b56-4509d39e1937",
-    "created": 1743529939,
-    "object": "chat.completion",
-    "title": "Penalties for Forgery under Saudi Law"
+JSON
+```
+</details>
+
+<details>
+<summary>React + fetch (TypeScript)</summary>
+
+```tsx
+import { ChatRequest, AssistantResponse } from "./types";
+
+export async function askBayen(
+  payload: ChatRequest,
+  apiKey: string
+): Promise<AssistantResponse> {
+  const res = await fetch("https://bayen-v1.onrender.com/chat", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-API-Key": apiKey,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    // Map status codes to UI-friendly errors
+    throw new Error(`Bayen API error ${res.status}`);
   }
+
+  return res.json();
 }
-data: [DONE]
+```
+</details>
+
+---
+
+## Error Handling
+
+| Status | Meaning                                | Typical Cause              |
+|--------|----------------------------------------|----------------------------|
+| 401    | Unauthorized                           | Missing / invalid `X-API-Key`. |
+| 502    | Upstream service unavailable           | Temporary provider outage. Retry with back-off. |
+| 500    | Invalid structured output              | Rare; file a bug if persistent. |
+
+---
+
+## TypeScript Types
+```ts
+export type BayenModel = "bayen-pro" | "bayen-lite";
+
+export interface Message {
+  role: "system" | "user" | "assistant";
+  content: string;
+}
+
+export interface ChatRequest {
+  model: BayenModel;
+  messages: Message[];
+  structured_output?: boolean;
+  max_tokens?: number;
+}
+
+export interface AssistantResponse {
+  think?: string | null;
+  message: string;
+  citations: string[];
+  metadata: {
+    id: string;
+    model: BayenModel;
+    created: number;   // Unix epoch (s)
+    object: string;    // "response.completion"
+    title: string;
+  };
+}
 ```
 
 ---
 
-## Usage Examples in Client Applications
+## Best Practices
 
-### Python Client Example
-
-Below is a sample Python script using `httpx` to consume the streaming API:
-
-```python
-import asyncio
-import httpx
-import json
-
-async def main():
-    url = "https://bayen-v1.onrender.com/chat"
-    headers = {
-        "X-API-Key": "YOUR_API_KEY",
-        "Content-Type": "application/json",
-        "Accept": "text/event-stream"
-    }
-    payload = {
-        "model": "bayen-pro",
-        "messages": [
-            {"role": "user", "content": "What are the penalties for forgery under Saudi law?"}
-        ],
-        "structured_output": True,
-        "max_tokens": 500
-    }
-    
-    async with httpx.AsyncClient(timeout=None) as client:
-        async with client.stream("POST", url, headers=headers, json=payload) as response:
-            async for line in response.aiter_lines():
-                if not line.strip():
-                    continue
-                if line.strip() == "[DONE]":
-                    break
-                # Remove "data: " prefix
-                content = line.strip()[6:]
-                try:
-                    chunk = json.loads(content)
-                    print("Chunk message:", chunk.get("message"))
-                    print("Chunk metadata:", chunk.get("metadata"))
-                except Exception as e:
-                    print("Error parsing chunk:", line, e)
-
-asyncio.run(main())
-```
-
-> **Note:** Replace `YOUR_API_KEY` with your actual API key.
+1. **Preserve context.**  Send the full conversation (`messages`) each turn; stateless requests simplify caching and scaling.  
+2. **Respect rate limits.**  Implement exponential back-off on 429/502 errors.  
+3. **Render Markdown safely.**  Use a sanitizer to avoid XSS when injecting HTML.  
+4. **Hide `think` in production.**  It contains raw reasoning, not meant for end-users.  
+5. **Display citations.**  They boost user trust—link them at the end of each answer.  
+6. **Progressive enhancement.**  Optimistic UI while waiting; fallback to offline message if 502 persists.  
+7. **No secret leakage.**  Never expose your `X-API-Key` or internal model names in client logs.
 
 ---
 
-## FAQ
+### Need Help?
 
-### 1. How do I send a complete conversation context to the API?
-- **Answer:**  
-  You must send all previous messages in the conversation in the `messages` array. This includes user messages and any system or assistant messages. If you omit a system message, the API automatically prepends a default system prompt to set context.
-
-### 2. How is the model chosen?
-- **Answer:**  
-  The API accepts a `model` parameter with values such as `bayen-pro` or `bayen-lite`. Internally, the alias is mapped to the appropriate configuration. However, the response metadata always returns the exact model alias provided in the request for clarity.
-
-### 3. What is the `max_tokens` parameter used for?
-- **Answer:**  
-  The `max_tokens` parameter controls the maximum length of the generated response. It is only included in the request payload if explicitly provided. Otherwise, it is omitted, and the API uses its default settings.
-
-### 4. How is the conversation title generated and maintained?
-- **Answer:**  
-  The AI is instructed via the system prompt to generate a brief conversation title based on the initial user query. This title is included in the `metadata` (under the `title` key) in every streamed chunk, ensuring that it remains constant throughout the conversation.
-
-### 5. What is the significance of the `<think> ... </think>` section in the response?
-- **Answer:**  
-  Within the final answer, there is a section enclosed between `<think>` tags that represents the AI’s internal reasoning or chain-of-thought prior to finalizing its response. This information is intended for transparency and debugging purposes. It is generally not meant for end-user display but can be used by developers to understand the AI's decision-making process.
-
-### 6. How should I handle the streaming response?
-- **Answer:**  
-  The API sends data as Server-Sent Events (SSE). Each chunk is prefixed with `data: ` and ends with a blank line. The stream terminates when a chunk with `data: [DONE]` is received. Clients must implement SSE or a similar mechanism to reassemble the full response.
-
-### 7. What are the best practices for maintaining context in subsequent requests?
-- **Answer:**  
-  Always include the full conversation history (all previous messages) when sending new requests so that the AI can maintain context. The conversation title remains fixed after the first response, so reuse it in the metadata if necessary on the client side.
-
-### 8. How do I ensure secure communication with the API?
-- **Answer:**  
-  Always include your API key in the `X-API-Key` header. Secure storage and usage of the API key are vital. Do not expose this key in client-side code.
-
----
-
-## Additional Information
-
-For further assistance or any inquiries regarding the API, please refer to this documentation or contact the development team through the project's repository.
-
----
-
-*End of Documentation*
-
-
+*Open an issue on this repo or ping the maintainers.*  
+Happy coding - may your UI and Bayen deliver justice together!
