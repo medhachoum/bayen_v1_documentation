@@ -1,6 +1,8 @@
-# Bayen API – Front-End Integration Guide
-Modern, well-typed JSON chat API for accessing **Bayen, the advanced Saudi-law assistant**.  
-This document is aimed at **front-end engineers** who need a crystal-clear contract for calling the service from web- or mobile-apps.
+# Bayen API SDK – Front-End Integration Guide  
+**Advanced Saudi Legal Assistant · v1.2.1**
+
+Modern JSON chat API that lets you embed _Bayen_’s Saudi-law reasoning into any web or mobile front-end.  
+This document is written **for front-end engineers**—no backend secrets are exposed.
 
 ---
 
@@ -10,9 +12,9 @@ This document is aimed at **front-end engineers** who need a crystal-clear contr
 3. [Endpoint Reference](#endpoint-reference)  
 4. [Request Schema](#request-schema)  
 5. [Response Schema](#response-schema)  
-6. [Example Chat Flow](#example-chat-flow)  
-7. [Error Handling](#error-handling)  
-8. [TypeScript Types](#typescript-types)  
+6. [Minimal Request Example](#minimal-request-example)  
+7. [TypeScript Types](#typescript-types)  
+8. [Error Handling & Troubleshooting](#error-handling--troubleshooting)  
 9. [Best Practices](#best-practices)  
 
 ---
@@ -21,79 +23,60 @@ This document is aimed at **front-end engineers** who need a crystal-clear contr
 ```
 https://bayen-v1.onrender.com
 ```
-
 All paths below are relative to this root.
 
 ---
 
 ## Authentication
-
-Every request **must** include an `X-API-Key` header:
-
-```
+Every call **must** include an `X-API-Key` header with your project key.
+```http
 X-API-Key: <your-project-key>
 ```
+If the key is missing or wrong you will receive **401 Unauthorized**.
 
-If the header is missing or invalid the server returns **401 Unauthorized**.
-
-> **Never** embed the key in compiled client bundles—pass it from a secure backend, environment variable, or in-app secret store.
+> **Never** ship the key inside a public bundle—store it in a secure vault, environment variable, or native secret store.
 
 ---
 
 ## Endpoint Reference
 
-| Method | Path   | Description             |
-|--------|--------|-------------------------|
-| POST   | `/chat` | Submit a chat turn and receive Bayen’s answer. |
+| Method | Path   | Description |
+|--------|--------|-------------|
+| POST   | `/chat` | Submit a user/assistant turn and get Bayen’s answer. |
 
-Streaming is **not** yet supported—the response arrives as a single JSON payload.
+Responses are delivered as one JSON object (no streaming—yet).
 
 ---
 
 ## Request Schema
-```jsonc
-{
-  "model": "bayen-pro",        // or "bayen-lite"
-  "messages": [                // conversation so far
-    { "role": "user", "content": "نص السؤال..." },
-    { "role": "assistant", "content": "رد سابق (اختياري)" }
-  ],
-  "structured_output": true,   // default = true
-  "max_tokens": 1024           // optional hard cap
-}
-```
 
-### Fields
+| Field                | Type / Enum                     | Required | Notes |
+|----------------------|---------------------------------|----------|-------|
+| `model`              | `"bayen-pro"` &#124; `"bayen-lite"` | ✓ | `bayen-pro` = deeper, slower. `bayen-lite` = faster, lighter. |
+| `messages`           | `Message[]`                     | ✓ | Chronological chat history (see below). |
+| `structured_output`  | `boolean`                       | ✕ | **Default = true** → Bayen returns a rich JSON envelope. |
+| `stream`             | `boolean`                       | ✕ | Currently ignored—kept for future streaming support. |
+| `max_tokens`         | `int`                           | ✕ | Soft cap; omit for default limit. |
 
-| Name               | Type / Enum                         | Required | Notes |
-|--------------------|-------------------------------------|----------|-------|
-| `model`            | `"bayen-pro"` \| `"bayen-lite"`     | ✓        | `bayen-pro` is deeper & slower; `bayen-lite` is lighter & faster. |
-| `messages`         | `Message[]`                         | ✓        | Chronological chat history. First item **must** have role `"user"`. |
-| `structured_output`| `boolean`                           | ✕        | When `true` the answer is returned in a rich JSON container (recommended).|
-| `max_tokens`       | `int`                               | ✕        | Soft limit; defaults to the provider’s maximum. |
-
-#### `Message`
 ```ts
-type MessageRole = "system" | "user" | "assistant";
-
+// Message object
+type MessageRole = 'system' | 'user' | 'assistant';
 interface Message {
   role: MessageRole;
   content: string;
 }
 ```
-* `system` messages are optional and let you override the default assistant behaviour (e.g. localisation).  
-* Use `assistant` messages only when you need to replay previous answers to maintain context.
+*   You normally send only `user` and (optionally) previous `assistant` messages.  
+*   **Do not** repeat the built-in system prompt—Bayen injects it server-side.
 
 ---
 
-## Response Schema
-
-With `structured_output = true` (default):
+## Response Schema (`structured_output = true`)
 
 ```jsonc
 {
-  "think": "تحليل داخلي (قد يكون فارغًا)...",
-  "message": "الإجابة النهائية بصيغة Markdown...",
+  "think": "internal Arabic reasoning…",
+  "message": "Markdown answer in Arabic (IRAC-formatted)…",
   "citations": [
     "https://laws.boe.gov.sa/.../article-12",
     "https://moj.gov.sa/..."
@@ -103,89 +86,75 @@ With `structured_output = true` (default):
     "model": "bayen-pro",
     "created": 1714320000,
     "object": "response.completion",
-    "title": "عنوان مختصر للاستشارة"
+    "title": "مختصر الاستشارة"
   }
 }
 ```
 
 | Field      | Type            | Description |
 |------------|-----------------|-------------|
-| `think`    | `string|null`   | Internal reasoning—useful for debugging; hide in production UIs if you wish. |
-| `message`  | `string`        | Ready-to-render Markdown answer in Arabic (IRAC-structured). |
-| `citations`| `string[]`      | List of authoritative URLs backing the analysis. |
-| `metadata` | `object`        | Tracking info (UUID, model, Unix epoch, etc.). |
+| `think`    | `string|null`   | Internal chain-of-thought (hide in production UIs). |
+| `message`  | `string`        | Ready-to-render Markdown answer. |
+| `citations`| `string[]`      | Authoritative URLs used as sources. |
+| `metadata` | `object`        | Tracking & provenance info. |
 
-If you set `structured_output = false` the server returns a **plain Markdown string** instead.
+If you set `structured_output = false`, the body is returned as **plain Markdown**.
 
 ---
 
-## Example Chat Flow
+## Minimal Request Example
 
-<details>
-<summary>Minimal cURL</summary>
+### HTTP ( cURL )
 
 ```bash
 curl -X POST https://bayen-v1.onrender.com/chat \
   -H "Content-Type: application/json" \
   -H "X-API-Key: $BAYEN_KEY" \
-  -d @- <<'JSON'
-{
-  "model": "bayen-lite",
-  "messages": [
-    { "role": "user", "content": "ما العقوبة على بيع منتج غذائي مغشوش في السعودية؟" }
-  ]
-}
-JSON
+  -d '{
+    "model": "bayen-pro",
+    "messages": [
+      {
+        "role": "user",
+        "content": "تم بيعي قمح مغشوش"
+      }
+    ],
+    "structured_output": true,
+    "max_tokens": 1024
+  }'
 ```
-</details>
 
-<details>
-<summary>React + fetch (TypeScript)</summary>
+### React / fetch (TypeScript)
 
 ```tsx
-import { ChatRequest, AssistantResponse } from "./types";
+import type { ChatRequest, AssistantResponse } from './types';
 
 export async function askBayen(
   payload: ChatRequest,
   apiKey: string
 ): Promise<AssistantResponse> {
-  const res = await fetch("https://bayen-v1.onrender.com/chat", {
-    method: "POST",
+  const res = await fetch('https://bayen-v1.onrender.com/chat', {
+    method: 'POST',
     headers: {
-      "Content-Type": "application/json",
-      "X-API-Key": apiKey,
+      'Content-Type': 'application/json',
+      'X-API-Key': apiKey
     },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(payload)
   });
 
-  if (!res.ok) {
-    // Map status codes to UI-friendly errors
-    throw new Error(`Bayen API error ${res.status}`);
-  }
-
+  if (!res.ok) throw new Error(`Bayen error ${res.status}`);
   return res.json();
 }
 ```
-</details>
-
----
-
-## Error Handling
-
-| Status | Meaning                                | Typical Cause              |
-|--------|----------------------------------------|----------------------------|
-| 401    | Unauthorized                           | Missing / invalid `X-API-Key`. |
-| 502    | Upstream service unavailable           | Temporary provider outage. Retry with back-off. |
-| 500    | Invalid structured output              | Rare; file a bug if persistent. |
 
 ---
 
 ## TypeScript Types
+
 ```ts
-export type BayenModel = "bayen-pro" | "bayen-lite";
+export type BayenModel = 'bayen-pro' | 'bayen-lite';
 
 export interface Message {
-  role: "system" | "user" | "assistant";
+  role: 'system' | 'user' | 'assistant';
   content: string;
 }
 
@@ -193,6 +162,7 @@ export interface ChatRequest {
   model: BayenModel;
   messages: Message[];
   structured_output?: boolean;
+  stream?: boolean;
   max_tokens?: number;
 }
 
@@ -203,8 +173,8 @@ export interface AssistantResponse {
   metadata: {
     id: string;
     model: BayenModel;
-    created: number;   // Unix epoch (s)
-    object: string;    // "response.completion"
+    created: number; // Unix epoch seconds
+    object: string;  // "response.completion"
     title: string;
   };
 }
@@ -212,19 +182,30 @@ export interface AssistantResponse {
 
 ---
 
-## Best Practices
+## Error Handling & Troubleshooting
 
-1. **Preserve context.**  Send the full conversation (`messages`) each turn; stateless requests simplify caching and scaling.  
-2. **Respect rate limits.**  Implement exponential back-off on 429/502 errors.  
-3. **Render Markdown safely.**  Use a sanitizer to avoid XSS when injecting HTML.  
-4. **Hide `think` in production.**  It contains raw reasoning, not meant for end-users.  
-5. **Display citations.**  They boost user trust—link them at the end of each answer.  
-6. **Progressive enhancement.**  Optimistic UI while waiting; fallback to offline message if 502 persists.  
-7. **No secret leakage.**  Never expose your `X-API-Key` or internal model names in client logs.
+| HTTP Status | Meaning                                | Common Cause                               |
+|-------------|----------------------------------------|-------------------------------------------|
+| 401         | Unauthorized                           | Missing/invalid `X-API-Key`.              |
+| 502         | Bad Gateway (upstream error)           | Bayen’s NLP provider returned ≥400; often due to **invalid JSON**. |
+| 500         | Invalid structured output              | Rare—open an issue if persistent.         |
+
+### Typical 502 root cause  
+If you see `Perplexity API failed: 400 Bad Request` inside the 502 body, your JSON payload is malformed (trailing commas, comments) or headers are missing. Validate with [jsonlint.com](https://jsonlint.com) and ensure `Content-Type: application/json`.
 
 ---
 
-### Need Help?
+## Best Practices
 
-*Open an issue on this repo or ping the maintainers.*  
-Happy coding - may your UI and Bayen deliver justice together!
+1. **Preserve context** – send the entire `messages` array each turn; the API is stateless.  
+2. **Render Markdown safely** – sanitise HTML to prevent XSS.  
+3. **Hide `think`** in production; expose it only for internal QA.  
+4. **Back-off & retry** on 429/502 with exponential delays.  
+5. **Never leak the API key** in logs or client code.  
+6. **Show citations** – linking them boosts user trust and legal traceability.
+
+---
+
+### Need Help?  
+Open an issue on this repo or ping the maintainers.  
+_© 2025 Bayen – Saudi Legal Assistant_
